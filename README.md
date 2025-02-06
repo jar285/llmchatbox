@@ -1,6 +1,6 @@
 # LLM-Powered Next.js Application
 
-This is a modern web application built with Next.js that leverages Large Language Models to provide intelligent responses and interactions.
+This is a modern web application built with Next.js that leverages Large Language Models to provide intelligent responses and interactions.  BUt we don't use server side rendering, its just the chat client side but this is nextjs.
 
 ## Prerequisites
 
