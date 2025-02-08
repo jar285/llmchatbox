@@ -1,83 +1,98 @@
 import { LLMResponse, Message, ChatMessage } from '@/lib/types';
 
-function convertToChatMessages(messages: Message[]): ChatMessage[] {
-  return messages.map(msg => ({
-    role: msg.sender === 'user' ? 'user' : 'assistant',
-    content: msg.content
-  }));
+const NAME_STORAGE_KEY = 'user_name';
+const HISTORY_STORAGE_KEY = 'chat_history';
+
+/**
+ * Extracts and stores the user's name if they introduce themselves.
+ */
+function extractUserName(messages: Message[]): string | null {
+  for (const msg of messages) {
+    if (msg.sender === 'user' && /i[’'`]?\s?m\s([A-Za-z]+)/i.test(msg.content)) {
+      const nameMatch = msg.content.match(/i[’'`]?\s?m\s([A-Za-z]+)/i);
+      if (nameMatch) {
+        const userName = nameMatch[1].trim();
+        localStorage.setItem(NAME_STORAGE_KEY, userName); // ✅ Store name persistently
+        return userName;
+      }
+    }
+  }
+  return localStorage.getItem(NAME_STORAGE_KEY); // ✅ Retrieve stored name if available
 }
 
-export async function getLLMResponse(message: string, previousMessages: Message[] = []): Promise<LLMResponse> {
+/**
+ * Saves conversation history to `localStorage`.
+ */
+function saveChatHistory(messages: Message[]) {
+  localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(messages));
+}
+
+/**
+ * Retrieves conversation history from `localStorage`.
+ */
+function loadChatHistory(): Message[] {
+  const history = localStorage.getItem(HISTORY_STORAGE_KEY);
+  return history ? JSON.parse(history) : [];
+}
+
+/**
+ * Calls the LLM API and ensures memory persistence.
+ */
+export async function getLLMResponse(userInput: string, previousMessages: Message[] = []): Promise<LLMResponse> {
+  const userName = extractUserName(previousMessages) || 'User'; // ✅ Correctly retrieve stored name
+
+  // Ensure past messages are remembered
+  const conversationHistory = [...loadChatHistory(), ...previousMessages];
+
+  // ✅ Include the stored name explicitly in the system prompt
+  const systemPrompt = `You are a helpful AI assistant. The user's name is "${userName}" if they told you. Always remember it and use it in responses. Also, remember the topics you have discussed.`;
+
+  // ✅ Format conversation for OpenAI API
+  const messages: ChatMessage[] = [
+    { role: 'system' as 'system', content: systemPrompt },
+    ...conversationHistory.map(msg => ({
+      role: msg.sender === 'user' ? ('user' as 'user') : ('assistant' as 'assistant'),
+      content: msg.content
+    })),
+    { role: 'user' as 'user', content: userInput }
+  ];
+
   try {
-    const systemPrompt = process.env.NEXT_PUBLIC_SYSTEM_PROMPT || 'You are a helpful assistant.';
-    const model = process.env.NEXT_PUBLIC_MODEL || 'o3-mini-2025-01-31';
-    const apiKey = process.env.NEXT_PUBLIC_OPENAI_API_KEY;
-
-    if (!apiKey) {
-      return {
-        message: '',
-        error: 'API key is not configured'
-      };
-    }
-
-    // Convert previous messages and create the messages array
-    const conversationHistory = convertToChatMessages(previousMessages);
-    const messages: ChatMessage[] = [
-      {
-        role: 'developer',
-        content: systemPrompt
-      },
-      ...conversationHistory,
-      {
-        role: 'user',
-        content: message
-      }
-    ];
-
-    const requestBody = {
-      model,
-      messages
-    };
-
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+        'Authorization': `Bearer ${process.env.NEXT_PUBLIC_OPENAI_API_KEY}`,
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ model: 'gpt-4-turbo', messages }),
     });
 
     const data = await response.json();
 
     if (!response.ok) {
-      return {
-        message: '',
-        error: data.error?.message || `API Error: ${response.status} - ${response.statusText}`
-      };
+      throw new Error(data.error?.message || `API Error: ${response.status} - ${response.statusText}`);
     }
 
-    return {
-      message: data.choices[0].message.content,
-      usage: data.usage ? {
-        promptTokens: data.usage.prompt_tokens,
-        completionTokens: data.usage.completion_tokens,
-        totalTokens: data.usage.total_tokens,
-        completionTokensDetails: data.usage.completion_tokens_details ? {
-          reasoningTokens: data.usage.completion_tokens_details.reasoning_tokens,
-          acceptedPredictionTokens: data.usage.completion_tokens_details.accepted_prediction_tokens,
-          rejectedPredictionTokens: data.usage.completion_tokens_details.rejected_prediction_tokens
-        } : undefined
-      } : null,
-      model: data.model,
-      systemFingerprint: data.system_fingerprint
+    // ✅ Store bot's response in memory
+    const botMessage: Message = {
+      id: `${Date.now()}-bot`,
+      content: data.choices[0].message.content,
+      sender: 'bot',
+      timestamp: new Date().toISOString(),
     };
+    saveChatHistory([...conversationHistory, botMessage]);
 
-  } catch (error) {
+    return { message: botMessage.content };
+  } catch (error: unknown) {
     console.error('Error in getLLMResponse:', error);
-    return {
-      message: '',
-      error: error instanceof Error ? error.message : 'Failed to get response'
-    };
+
+    let errorMessage = 'An unknown error occurred.';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else if (typeof error === 'string') {
+      errorMessage = error;
+    }
+
+    return { message: 'Sorry, I encountered an error processing your request.', error: errorMessage };
   }
 }
