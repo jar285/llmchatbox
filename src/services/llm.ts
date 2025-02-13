@@ -39,15 +39,13 @@ function loadChatHistory(): Message[] {
  * Calls the LLM API and ensures memory persistence.
  */
 export async function getLLMResponse(userInput: string, previousMessages: Message[] = []): Promise<LLMResponse> {
-  const userName = extractUserName(previousMessages) || 'User'; // ✅ Correctly retrieve stored name
-
-  // Ensure past messages are remembered
+  const userName = extractUserName(previousMessages) || 'User';
   const conversationHistory = [...loadChatHistory(), ...previousMessages];
 
-  // ✅ Include the stored name explicitly in the system prompt
-  const systemPrompt = `You are a helpful AI assistant. The user's name is "${userName}" if they told you. Always remember it and use it in responses. Also, remember the topics you have discussed.`;
+  // Use the system prompt from environment variables
+  const systemPrompt = process.env.NEXT_PUBLIC_SYSTEM_PROMPT || 
+    `You are a helpful AI assistant. The user's name is "${userName}" if they told you. Always remember it and use it in responses. Also, remember the topics you have discussed.`;
 
-  // ✅ Format conversation for OpenAI API
   const messages: ChatMessage[] = [
     { role: 'system' as 'system', content: systemPrompt },
     ...conversationHistory.map(msg => ({
@@ -64,7 +62,10 @@ export async function getLLMResponse(userInput: string, previousMessages: Messag
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${process.env.NEXT_PUBLIC_OPENAI_API_KEY}`,
       },
-      body: JSON.stringify({ model: 'gpt-4-turbo', messages }),
+      body: JSON.stringify({ 
+        model: process.env.NEXT_PUBLIC_MODEL || 'gpt-4-turbo', 
+        messages 
+      }),
     });
 
     const data = await response.json();
